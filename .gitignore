@@ -30,3 +30,7 @@ Thumbs.db
 
 # IDE/Editor
 .vscode/
+
+# Training outputs
+results/
+Llama_ft/

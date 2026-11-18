@@ -21,8 +21,11 @@ from peft import TaskType
 ds = load_dataset("Deysi/spam-detection-dataset", split="train")
 print("Dataset", ds.column_names)
 
+import os
 from huggingface_hub import login
-login(token="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")
+
+# Llama 3.2 is a gated model: export HF_TOKEN=<your token> before running.
+login(token=os.environ["HF_TOKEN"])
 # small_ds = ds.select([i for i in range(1000)])
 
 # prompt_template = "This is a {} message: {}"
@@ -78,7 +81,6 @@ print("Columns", ds.column_names)
 tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
 tokenizer.pad_token = tokenizer.eos_token
 model_name = "meta-llama/Llama-3.2-1B"
-access_token = "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"
 
 model = AutoModelForCausalLM.from_pretrained(model_name,
                                               device_map = {'':torch.cuda.current_device()}, 
@@ -90,19 +92,23 @@ model.resize_token_embeddings(len(tokenizer))
 MAX_LENGTH = 128
 
 def _preprocess_batch(batch: Dict[str, List[str]]):
-    inputs = tokenizer(batch["text"], padding="max_length", truncation=True, max_length=MAX_LENGTH)
+    """Tokenise prompt + answer as one sequence for causal-LM training.
 
-    outputs = tokenizer(batch["Answer"], padding="max_length", truncation=True, max_length=MAX_LENGTH)
+    Labels are the input ids with the prompt and padding masked to -100, so the loss
+    is computed only on the answer tokens. (The previous version used the separately
+    tokenised answer as labels, which is not aligned with the input positions.)
+    """
+    texts = [t + tokenizer.eos_token for t in batch["text"]]
+    enc = tokenizer(texts, padding="max_length", truncation=True, max_length=MAX_LENGTH)
 
-    inputs["labels"] = outputs["input_ids"]
-
-    # inputs = tokenizer(batch["text"], padding="max_length", truncation=True, max_length=MAX_LENGTH)
-    # inputs["input_ids"] = inputs["input_ids"]
-    # inputs["attention_mask"] = inputs["attention_mask"]
-    
-    # # Create labels from input_ids
-    # inputs["labels"] = inputs["input_ids"]
-    return inputs
+    labels = []
+    for prompt, ids, mask in zip(batch["Prompt"], enc["input_ids"], enc["attention_mask"]):
+        n_prompt = len(tokenizer(prompt + "\n\n")["input_ids"])
+        lab = [tok if m == 1 else -100 for tok, m in zip(ids, mask)]
+        lab[:n_prompt] = [-100] * min(n_prompt, len(lab))
+        labels.append(lab)
+    enc["labels"] = labels
+    return enc
 
 _preprocesing_fn = partial(_preprocess_batch)
 encode_ds = ds.map(_preprocesing_fn, batched=True, remove_columns = ["text", "label", "Prompt", "Answer"])
