@@ -115,7 +115,9 @@ encode_ds = ds.map(_preprocesing_fn, batched=True, remove_columns = ["text", "la
 print(encode_ds.column_names)
 
 
-processed_ds = encode_ds.filter(lambda rec: len(rec["input_ids"]) <= MAX_LENGTH)
+# Drop examples whose answer was truncated away (all labels masked): they carry no training signal
+# and make the loss NaN for that batch.
+processed_ds = encode_ds.filter(lambda rec: any(l != -100 for l in rec["labels"]))
 
 split_ds = processed_ds.train_test_split(test_size= 100, seed=42)
 data_collator = DataCollatorForSeq2Seq(tokenizer, model=model, max_length=MAX_LENGTH, padding="max_length", pad_to_multiple_of=8)
